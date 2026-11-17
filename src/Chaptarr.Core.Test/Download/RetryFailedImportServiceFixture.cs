@@ -31,6 +31,8 @@ namespace Chaptarr.Core.Test.Download
         {
             private readonly Dictionary<string, TrackedDownload> _trackedDownloads;
 
+            public TrackedDownloadState StateForNewDownloads { get; set; } = TrackedDownloadState.Downloading;
+
             public StubTrackedDownloadService(params TrackedDownload[] trackedDownloads)
             {
                 _trackedDownloads = trackedDownloads.ToDictionary(download => download.DownloadItem.DownloadId, StringComparer.OrdinalIgnoreCase);
@@ -69,7 +71,7 @@ namespace Chaptarr.Core.Test.Download
                 {
                     DownloadClient = downloadClient.Id,
                     DownloadItem = downloadItem,
-                    State = TrackedDownloadState.Downloading,
+                    State = StateForNewDownloads,
                     IsTrackable = true
                 };
 
@@ -183,7 +185,7 @@ namespace Chaptarr.Core.Test.Download
             public IDownloadClient Client { get; set; }
 
             public IDownloadClient GetDownloadClient(DownloadProtocol downloadProtocol, BookMediaType mediaType, int indexerId = 0, bool filterBlockedClients = false, HashSet<int> tags = null) => throw new NotImplementedException();
-            public IEnumerable<IDownloadClient> GetDownloadClients(bool filterBlockedClients = false) => throw new NotImplementedException();
+            public IEnumerable<IDownloadClient> GetDownloadClients(bool filterBlockedClients = false) => Client == null ? Enumerable.Empty<IDownloadClient>() : new[] { Client };
             public IDownloadClient Get(int id) => Client != null && Client.Definition.Id == id ? Client : null;
         }
 
@@ -373,6 +375,35 @@ namespace Chaptarr.Core.Test.Download
 
             Assert.That(completedDownloadService.ImportedDownloadIds, Is.EqualTo(new[] { "download-1" }));
             Assert.That(commandResultReporter.Results, Is.EqualTo(new[] { CommandResult.Unsuccessful }));
+        }
+
+        [Test]
+        public void should_restore_blocked_download_from_client_after_tracker_cache_is_lost()
+        {
+            var trackedDownloadService = new StubTrackedDownloadService
+            {
+                StateForNewDownloads = TrackedDownloadState.ImportBlocked
+            };
+            var client = CreateDownloadClient(CreateClientItem("download-restored", DownloadItemStatus.Completed));
+            var completedDownloadService = new StubCompletedDownloadService(TrackedDownloadState.Imported);
+            var conversionTrackingService = new RecordingConversionTrackingService();
+            var commandResultReporter = new RecordingCommandResultReporter();
+            var eventAggregator = new RecordingEventAggregator();
+            var subject = new RetryFailedImportService(
+                trackedDownloadService,
+                new StubDownloadClientProvider { Client = client },
+                new StubRemotePathMappingService(),
+                completedDownloadService,
+                new RecordingDownloadClientFileSnapshotService(),
+                conversionTrackingService,
+                commandResultReporter,
+                eventAggregator,
+                LogManager.GetCurrentClassLogger());
+
+            subject.Execute(new RetryFailedImportCommand { DownloadId = "download-restored" });
+
+            Assert.That(completedDownloadService.ImportedDownloadIds, Is.EqualTo(new[] { "download-restored" }));
+            Assert.That(commandResultReporter.Results, Is.Empty);
         }
 
         [Test]

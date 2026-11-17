@@ -85,6 +85,11 @@ namespace NzbDrone.Core.Download
             var trackedDownload = _trackedDownloadService.Find(downloadId);
             if (trackedDownload == null)
             {
+                trackedDownload = RestoreTrackedDownload(downloadId);
+            }
+
+            if (trackedDownload == null)
+            {
                 throw new InvalidOperationException($"Unable to retry import because download '{downloadId}' is not currently tracked.");
             }
 
@@ -130,6 +135,37 @@ namespace NzbDrone.Core.Download
             {
                 _commandResultReporter.Report(CommandResult.Unsuccessful);
             }
+        }
+
+        private TrackedDownload RestoreTrackedDownload(string downloadId)
+        {
+            foreach (var downloadClient in _downloadClientProvider.GetDownloadClients())
+            {
+                try
+                {
+                    var downloadItem = downloadClient.GetItems()
+                        .FirstOrDefault(item => string.Equals(item.DownloadId, downloadId, StringComparison.OrdinalIgnoreCase));
+                    if (downloadItem == null || downloadClient.Definition is not DownloadClientDefinition definition)
+                    {
+                        continue;
+                    }
+
+                    var trackedDownload = _trackedDownloadService.TrackDownload(definition, downloadItem);
+                    if (trackedDownload != null)
+                    {
+                        _logger.Info("[IMPORT-RETRY] Restored tracked download '{0}' from download client {1} using saved history",
+                            downloadId, definition.Name);
+                        return trackedDownload;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.Debug(ex, "Unable to restore tracked download '{0}' from download client {1}",
+                        downloadId, downloadClient?.Definition?.Name ?? "<unknown>");
+                }
+            }
+
+            return null;
         }
 
         private static bool CanRetryImport(TrackedDownload trackedDownload)
