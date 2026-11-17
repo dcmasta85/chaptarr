@@ -2161,7 +2161,7 @@ namespace Chaptarr.Core.Test.MediaFiles
         // The rows share no work id and their editions share no ISBN/ASIN/edition id, but a human
         // sees the same author, media type, edition title and narrator. Modelled on real data:
         // 6698 (hc:429306, German work title) and 6875 (gr:6231171) for Chamber of Secrets.
-        private static RecordingImportApprovedBooks RunTrackedImportForTwinRows(Author author, Book targetBook, List<Edition> targetEditions, Book matchedBook, Edition matchedEdition)
+        private static RecordingImportApprovedBooks RunTrackedImportForTwinRows(Author author, Book targetBook, List<Edition> targetEditions, Book matchedBook, Edition matchedEdition, bool unmatched = false)
         {
             var tempDir = Path.Combine(Path.GetTempPath(), "chaptarr-tests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(tempDir);
@@ -2175,7 +2175,7 @@ namespace Chaptarr.Core.Test.MediaFiles
                 {
                     InitialResult = new FileMatchResult
                     {
-                        MatchedFiles = new[]
+                        MatchedFiles = unmatched ? Array.Empty<FileMatch>() : new[]
                         {
                             new FileMatch
                             {
@@ -2187,12 +2187,17 @@ namespace Chaptarr.Core.Test.MediaFiles
                                 EditionId = matchedEdition.Id
                             }
                         },
-                        UnmatchedFiles = Array.Empty<UnmatchedFile>()
+                        UnmatchedFiles = unmatched
+                            ? new[] { new UnmatchedFile { File = new DiscoveredFileWithMetadata { Path = filePath, Size = 4, Modified = DateTime.UtcNow, AllTags = tagsService.Tags }, Reason = "No confident title match" } }
+                            : Array.Empty<UnmatchedFile>()
                     }
                 };
 
-                matchedEdition.Book = matchedBook;
-                matchedBook.Editions = new List<Edition> { matchedEdition };
+                if (matchedBook != null && matchedEdition != null)
+                {
+                    matchedEdition.Book = matchedBook;
+                    matchedBook.Editions = new List<Edition> { matchedEdition };
+                }
                 foreach (var edition in targetEditions)
                 {
                     edition.Book = targetBook;
@@ -2204,7 +2209,10 @@ namespace Chaptarr.Core.Test.MediaFiles
 
                 var bookService = DispatchProxy.Create<IBookService, BookServiceProxy>();
                 var bookProxy = (BookServiceProxy)(object)bookService;
-                bookProxy.BooksById[matchedBook.Id] = matchedBook;
+                if (matchedBook != null)
+                {
+                    bookProxy.BooksById[matchedBook.Id] = matchedBook;
+                }
                 bookProxy.BooksById[targetBook.Id] = targetBook;
 
                 var authorService = DispatchProxy.Create<IAuthorService, AuthorServiceProxy>();
@@ -2212,8 +2220,11 @@ namespace Chaptarr.Core.Test.MediaFiles
 
                 var editionService = DispatchProxy.Create<IEditionService, EditionServiceProxy>();
                 var editionProxy = (EditionServiceProxy)(object)editionService;
-                editionProxy.EditionsById[matchedEdition.Id] = matchedEdition;
-                editionProxy.EditionsByBookId[matchedBook.Id] = new List<Edition> { matchedEdition };
+                if (matchedEdition != null)
+                {
+                    editionProxy.EditionsById[matchedEdition.Id] = matchedEdition;
+                    editionProxy.EditionsByBookId[matchedBook.Id] = new List<Edition> { matchedEdition };
+                }
                 editionProxy.EditionsByBookId[targetBook.Id] = targetEditions;
                 foreach (var edition in targetEditions)
                 {
@@ -2237,7 +2248,9 @@ namespace Chaptarr.Core.Test.MediaFiles
                     DispatchProxy.Create<IEventAggregator, ThrowingProxy<IEventAggregator>>(),
                     DispatchProxy.Create<NzbDrone.Common.EnvironmentInfo.IRuntimeInfo, ThrowingProxy<NzbDrone.Common.EnvironmentInfo.IRuntimeInfo>>(),
                     DispatchProxy.Create<IMediaInfoExtractor, ThrowingProxy<IMediaInfoExtractor>>(),
-                    LogManager.GetCurrentClassLogger());
+                    LogManager.GetCurrentClassLogger(),
+                    queueService: global::Chaptarr.Core.Test.Common.ImportLifecycleStubs.EmptyQueue(),
+                    conversionJobService: global::Chaptarr.Core.Test.Common.ImportLifecycleStubs.NoConversionJobs());
 
                 var remoteBook = new RemoteBook
                 {
@@ -2245,7 +2258,10 @@ namespace Chaptarr.Core.Test.MediaFiles
                     Books = new List<Book>
                     {
                         new Book { Id = targetBook.Id, AuthorId = author.Id, Title = targetBook.Title, AnyEditionOk = true, MediaType = targetBook.MediaType, HardcoverBookId = targetBook.HardcoverBookId, GoodreadsWorkId = targetBook.GoodreadsWorkId }
-                    }
+                    },
+                    TargetEditionIds = unmatched && targetEditions.Count == 1
+                        ? new Dictionary<int, int> { [targetBook.Id] = targetEditions[0].Id }
+                        : new Dictionary<int, int>()
                 };
 
                 var downloadClientItem = new DownloadClientItem
@@ -2315,6 +2331,22 @@ namespace Chaptarr.Core.Test.MediaFiles
             Assert.That(result.Decisions[0].Approved, Is.True, string.Join(" | ", result.Decisions[0].Rejections.Select(r => r.Reason)));
             Assert.That(result.Decisions[0].Item.Book.Id, Is.EqualTo(6698));
             Assert.That(result.Decisions[0].Item.Edition.Id, Is.EqualTo(28198));
+        }
+
+        [Test]
+        public void should_use_captured_grabbed_book_and_edition_when_file_title_is_unmatched()
+        {
+            var author = TwinRowsAuthor();
+            var grabbed = TwinRowsGrabbedBook();
+            var grabbedEdition = TwinRowsEdition(28198, grabbed.Id, "The One Thing", "", "", monitored: true);
+
+            var result = RunTrackedImportForTwinRows(author, grabbed, new List<Edition> { grabbedEdition }, null, null, unmatched: true);
+
+            Assert.That(result.Decisions, Has.Count.EqualTo(1));
+            Assert.That(result.Decisions[0].Approved, Is.True, string.Join(" | ", result.Decisions[0].Rejections.Select(r => r.Reason)));
+            Assert.That(result.Decisions[0].Item.Book.Id, Is.EqualTo(grabbed.Id));
+            Assert.That(result.Decisions[0].Item.Edition.Id, Is.EqualTo(grabbedEdition.Id));
+            Assert.That(result.Decisions[0].Item.MatchProvenance.Route, Is.EqualTo("tracked_download_captured_target"));
         }
 
         [Test]

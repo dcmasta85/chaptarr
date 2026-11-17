@@ -502,6 +502,13 @@ namespace NzbDrone.Core.MediaFiles
                     continue;
                 }
 
+                var capturedTargetDecision = CreateDecisionFromCapturedGrabTarget(um, remoteBook, downloadClientItem, author);
+                if (capturedTargetDecision != null)
+                {
+                    decisions.Add(capturedTargetDecision);
+                    continue;
+                }
+
                 var local = new LocalBook { Path = um.File.Path };
                 var reason = BuildUnmatchedRejectionReason(um);
                 decisions.Add(new ImportDecision<LocalBook>(local, new Rejection(reason)));
@@ -518,6 +525,90 @@ namespace NzbDrone.Core.MediaFiles
             }
 
             return _importApprovedBooks.Import(decisions, replaceExisting: true, downloadClientItem: downloadClientItem, importMode: effectiveMode);
+        }
+
+        private ImportDecision<LocalBook> CreateDecisionFromCapturedGrabTarget(UnmatchedFile unmatched, RemoteBook remoteBook, DownloadClientItem downloadClientItem, Author author)
+        {
+            // A tracked download has an authoritative target captured at grab time. If it contains
+            // exactly one book and the grab history recorded the exact edition, use that identity
+            // when file tags/title are too incomplete or divergent for metadata matching. Never use
+            // this fallback for manual imports, multi-book grabs, alternative-copy payloads, or when
+            // the captured edition cannot be proven to belong to the captured book.
+            var expectedBooks = remoteBook?.Books?.Where(book => book?.Id > 0).ToList();
+            var file = unmatched?.File;
+            if (downloadClientItem == null || remoteBook == null || remoteBook.AlternativeCopies ||
+                expectedBooks?.Count != 1 || file == null || string.IsNullOrWhiteSpace(file.Path) ||
+                !remoteBook.TargetEditionIds.TryGetValue(expectedBooks[0].Id, out var capturedEditionId) || capturedEditionId <= 0)
+            {
+                return null;
+            }
+
+            var targetBook = HydrateExpectedBook(expectedBooks[0]);
+            var fileMediaType = QualityMediaTypeHelper.GetMediaTypeFromPath(file.Path);
+            var targetAuthor = targetBook.Author?.Id == targetBook.AuthorId ? targetBook.Author : author;
+            if (targetBook.MediaType != fileMediaType || targetAuthor?.Id <= 0 || targetAuthor.Id != targetBook.AuthorId)
+            {
+                return null;
+            }
+
+            var edition = targetBook.Editions?.FirstOrDefault(candidate => candidate?.Id == capturedEditionId);
+            edition ??= _editionService.GetEdition(capturedEditionId);
+            if (edition == null || edition.Id != capturedEditionId || edition.BookId != targetBook.Id)
+            {
+                _logger.Warn("[DOWNLOAD-IMPORT] Refusing captured-target fallback for '{0}': grab edition {1} does not belong to captured book {2}",
+                    file.Path, capturedEditionId, FormatBookLabel(targetBook));
+                return null;
+            }
+
+            edition.Book ??= targetBook;
+            var provenance = new MatchProvenance
+            {
+                Mode = "Automatic",
+                Route = "tracked_download_captured_target",
+                MatchedVia = "captured_grab_history",
+                SelectionSource = "download_history",
+                Summary = "Used the single book and exact edition captured when this tracked download was grabbed",
+                ImportDownloadId = downloadClientItem.DownloadId,
+                ImportSourcePaths = new List<string> { file.Path },
+                SupportingSignals = new List<MatchSignal>
+                {
+                    new MatchSignal
+                    {
+                        Type = "captured_grab_target",
+                        Scope = "book",
+                        Source = "download_history",
+                        Expected = FormatBookLabel(targetBook),
+                        Detail = "The tracked download was grabbed for this single persisted book record."
+                    },
+                    new MatchSignal
+                    {
+                        Type = "captured_grab_edition",
+                        Scope = "edition",
+                        Source = "download_history",
+                        Expected = FormatEditionLabel(edition),
+                        Detail = "The exact edition ID was recorded in grab history and belongs to the target book."
+                    }
+                }
+            }.CloneForDestination(targetAuthor, targetBook, edition);
+
+            _logger.Warn("[DOWNLOAD-IMPORT] File '{0}' did not match catalog metadata; using captured single-book grab target {1} / edition {2}",
+                file.Path, FormatBookLabel(targetBook), FormatEditionLabel(edition));
+
+            var localBook = new LocalBook
+            {
+                Path = file.Path,
+                Book = targetBook,
+                Author = targetAuthor,
+                Edition = edition,
+                Size = _diskProvider.GetFileSize(file.Path),
+                Modified = _diskProvider.FileGetLastWrite(file.Path),
+                DurationSeconds = file.DurationSeconds,
+                Quality = GuessQualityByExtension(file.Path),
+                RawTags = new RawFileTags { AllTags = file.AllTags ?? new Dictionary<string, List<string>>() },
+                MatchProvenance = provenance
+            };
+
+            return new ImportDecision<LocalBook>(localBook);
         }
 
         private ImportDecision<LocalBook> CreateDecisionForMatch(FileMatch match, Dictionary<string, Dictionary<string, List<string>>> tagsByPath, IDictionary<int, Book> booksById, IDictionary<int, Author> authorsById)
@@ -981,7 +1072,7 @@ namespace NzbDrone.Core.MediaFiles
         {
             return string.IsNullOrWhiteSpace(value)
                 ? string.Empty
-                : NzbDrone.Core.Parser.Parser.NormalizeTitle(value);
+                : NzbDrone.Core.Books.Extensions.StringSuperNormalizer.NormalizeForFts(value);
         }
 
         private static bool FormatsCompatible(string left, string right)
