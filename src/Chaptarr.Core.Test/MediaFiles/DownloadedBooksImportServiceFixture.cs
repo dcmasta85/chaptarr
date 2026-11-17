@@ -2161,11 +2161,17 @@ namespace Chaptarr.Core.Test.MediaFiles
         // The rows share no work id and their editions share no ISBN/ASIN/edition id, but a human
         // sees the same author, media type, edition title and narrator. Modelled on real data:
         // 6698 (hc:429306, German work title) and 6875 (gr:6231171) for Chamber of Secrets.
-        private static RecordingImportApprovedBooks RunTrackedImportForTwinRows(Author author, Book targetBook, List<Edition> targetEditions, Book matchedBook, Edition matchedEdition, bool unmatched = false)
+        private static RecordingImportApprovedBooks RunTrackedImportForTwinRows(Author author, Book targetBook, List<Edition> targetEditions, Book matchedBook, Edition matchedEdition, bool unmatched = false, bool asFolder = false)
         {
             var tempDir = Path.Combine(Path.GetTempPath(), "chaptarr-tests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(tempDir);
-            var filePath = Path.Combine(tempDir, "Expected.m4b");
+            var importPath = tempDir;
+            if (asFolder)
+            {
+                importPath = Path.Combine(tempDir, "Release");
+                Directory.CreateDirectory(importPath);
+            }
+            var filePath = Path.Combine(importPath, "Expected.m4b");
             File.WriteAllBytes(filePath, new byte[] { 1, 2, 3, 4 });
 
             try
@@ -2271,7 +2277,7 @@ namespace Chaptarr.Core.Test.MediaFiles
                     DownloadClientInfo = new DownloadClientItemClientInfo { Id = 1, Name = "SABnzbd", Type = "Sabnzbd" }
                 };
 
-                _ = service.ProcessPath(filePath, ImportMode.Auto, author, downloadClientItem, remoteBook);
+                _ = service.ProcessPath(asFolder ? importPath : filePath, ImportMode.Auto, author, downloadClientItem, remoteBook);
 
                 return importApproved;
             }
@@ -2341,6 +2347,23 @@ namespace Chaptarr.Core.Test.MediaFiles
             var grabbedEdition = TwinRowsEdition(28198, grabbed.Id, "The One Thing", "", "", monitored: true);
 
             var result = RunTrackedImportForTwinRows(author, grabbed, new List<Edition> { grabbedEdition }, null, null, unmatched: true);
+
+            Assert.That(result.Decisions, Has.Count.EqualTo(1));
+            Assert.That(result.Decisions[0].Approved, Is.True, string.Join(" | ", result.Decisions[0].Rejections.Select(r => r.Reason)));
+            Assert.That(result.Decisions[0].Item.Book.Id, Is.EqualTo(grabbed.Id));
+            Assert.That(result.Decisions[0].Item.Edition.Id, Is.EqualTo(grabbedEdition.Id));
+            Assert.That(result.Decisions[0].Item.MatchProvenance.Route, Is.EqualTo("tracked_download_captured_target"));
+        }
+
+        [Test]
+        public void should_use_captured_grabbed_book_and_edition_for_unmatched_files_in_download_folder()
+        {
+            var author = TwinRowsAuthor();
+            var grabbed = TwinRowsGrabbedBook();
+            var grabbedEdition = TwinRowsEdition(28198, grabbed.Id, "The One Thing", "", "", monitored: true);
+
+            var result = RunTrackedImportForTwinRows(author, grabbed, new List<Edition> { grabbedEdition }, null, null,
+                unmatched: true, asFolder: true);
 
             Assert.That(result.Decisions, Has.Count.EqualTo(1));
             Assert.That(result.Decisions[0].Approved, Is.True, string.Join(" | ", result.Decisions[0].Rejections.Select(r => r.Reason)));

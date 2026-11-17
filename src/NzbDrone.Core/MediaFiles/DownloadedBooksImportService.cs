@@ -333,6 +333,13 @@ namespace NzbDrone.Core.MediaFiles
                 tagsByPath.TryGetValue(um.File.Path, out var unmatchedTags);
                 unmatchedTags ??= um.File.AllTags ?? new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
+                var capturedTargetDecision = CreateDecisionFromCapturedGrabTarget(um, remoteBook, downloadClientItem, author);
+                if (capturedTargetDecision != null)
+                {
+                    decisions.Add(capturedTargetDecision);
+                    continue;
+                }
+
                 var local = new LocalBook
                 {
                     Path = um.File.Path,
