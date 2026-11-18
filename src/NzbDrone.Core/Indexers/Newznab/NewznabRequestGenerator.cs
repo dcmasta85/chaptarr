@@ -124,8 +124,6 @@ namespace NzbDrone.Core.Indexers.Newznab
                     "search",
                     $"&q={NewsnabifyTitle(searchCriteria.AuthorQuery)}+{NewsnabifyTitle(searchCriteria.BookQuery)}"));
 
-                pageableRequests.AddTier();
-
                 pageableRequests.Add(GetPagedRequests(MaxPages,
                     searchCategories,
                     "search",

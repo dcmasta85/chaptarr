@@ -129,10 +129,37 @@ namespace Chaptarr.Core.Test.Indexers
                     SupportedBookSearchParameters = genericOnly ? null : new[] { "author", "title" }
                 };
                 var chain = CreateGenerator(capabilities).GetSearchRequests(Criteria());
-                Assert.That(chain.Tiers, Is.EqualTo(genericOnly ? 3 : 1));
+                Assert.That(chain.Tiers, Is.EqualTo(genericOnly ? 2 : 1));
                 Assert.That(SearchText(chain.GetTier(0).First().First()),
                     genericOnly ? Is.EqualTo("Storm Front Jim Butcher James Marsters") : Is.EqualTo("book|Jim Butcher|Storm Front"));
             }
+        }
+
+        [Test]
+        public async Task should_not_let_a_generic_author_title_hit_suppress_the_title_only_query()
+        {
+            if (_kind == "MyAnonaMouse")
+            {
+                Assert.Ignore("MAM uses its native search request format rather than Newznab q parameters.");
+            }
+
+            var genericOnly = new NewznabCapabilities
+            {
+                SupportedSearchParameters = new[] { "q" },
+                SupportedBookSearchParameters = null
+            };
+            var criteria = Criteria();
+            criteria.Books[0].Editions[0].Narrator = null;
+            var probe = new TierProbe(CreateGenerator(genericOnly), firstTierHasResults: true);
+
+            await probe.Fetch(criteria);
+
+            Assert.That(probe.Queries, Is.EqualTo(new[]
+            {
+                "Storm Front Jim Butcher",
+                "Jim Butcher Storm Front",
+                "Storm Front"
+            }));
         }
 
         [Test]
