@@ -18,6 +18,7 @@ using NzbDrone.Core.History;
 using NzbDrone.Core.Indexers;
 using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.MediaFiles.BookImport;
+using NzbDrone.Core.MediaFiles.BookImport.Services;
 using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.RootFolders;
@@ -301,6 +302,7 @@ namespace Chaptarr.Core.Test.MediaFiles
         private class EditionServiceProxy : DispatchProxy
         {
             public Edition Edition { get; set; }
+            public bool ThrowForUnknownEdition { get; set; }
             public List<Edition> EditionsByBook { get; set; } = new();
             public Dictionary<int, Edition> EditionsById { get; } = new();
             public Dictionary<int, List<Edition>> EditionsByBookId { get; } = new();
@@ -312,6 +314,11 @@ namespace Chaptarr.Core.Test.MediaFiles
                     if (args?.Length > 0 && args[0] is int id && EditionsById.TryGetValue(id, out var mapped))
                     {
                         return mapped;
+                    }
+
+                    if (ThrowForUnknownEdition)
+                    {
+                        throw new InvalidOperationException($"Edition with ID {args?[0]} does not exist");
                     }
 
                     return Edition;
@@ -2562,6 +2569,28 @@ namespace Chaptarr.Core.Test.MediaFiles
             {
                 try { Directory.Delete(tempDir, recursive: true); } catch { }
             }
+        }
+
+        [Test]
+        public void stale_grabbed_edition_should_fall_back_to_current_monitored_edition()
+        {
+            var book = new Book { Id = 2872, AuthorId = 47, Title = "The Fifth Season" };
+            var currentEdition = new Edition { Id = 14035, BookId = book.Id, Title = "The Fifth Season", Monitored = true };
+            var editionService = DispatchProxy.Create<IEditionService, EditionServiceProxy>();
+            var editionProxy = (EditionServiceProxy)(object)editionService;
+            editionProxy.EditionsByBookId[book.Id] = new List<Edition> { currentEdition };
+            editionProxy.ThrowForUnknownEdition = true;
+
+            var historyService = DispatchProxy.Create<IHistoryService, HistoryServiceProxy>();
+            ((HistoryServiceProxy)(object)historyService).HistoryItems = new List<EntityHistory>
+            {
+                new() { EventType = EntityHistoryEventType.Grabbed, BookId = book.Id, EditionId = 13917, DownloadId = "DOWNLOAD-STALE-EDITION", Date = DateTime.UtcNow }
+            };
+
+            var resolved = TrackedMultipartAudioRepairHelper.ResolveExpectedTrackedEdition(
+                book, "DOWNLOAD-STALE-EDITION", historyService, editionService);
+
+            Assert.That(resolved, Is.SameAs(currentEdition));
         }
 
         [Test]

@@ -158,8 +158,10 @@ namespace NzbDrone.Core.MediaFiles.BookImport.Services
 
                 if (historicalEditionId > 0)
                 {
-                    var historicalEdition = editionsForBook.FirstOrDefault(edition => edition.Id == historicalEditionId)
-                        ?? editionService.GetEdition(historicalEditionId);
+                    // The grab history can outlive catalog refreshes that replace an edition row.
+                    // Only use a historical edition if it is still among this book's current editions;
+                    // otherwise fall through to a currently monitored edition below.
+                    var historicalEdition = editionsForBook.FirstOrDefault(edition => edition.Id == historicalEditionId);
 
                     if (historicalEdition?.BookId == book.Id)
                     {
