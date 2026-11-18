@@ -129,10 +129,30 @@ namespace Chaptarr.Core.Test.Indexers
                     SupportedBookSearchParameters = genericOnly ? null : new[] { "author", "title" }
                 };
                 var chain = CreateGenerator(capabilities).GetSearchRequests(Criteria());
-                Assert.That(chain.Tiers, Is.EqualTo(genericOnly ? 3 : 2));
-                Assert.That(SearchText(chain.GetTier(0).Single().First()),
+                Assert.That(chain.Tiers, Is.EqualTo(genericOnly ? 3 : 1));
+                Assert.That(SearchText(chain.GetTier(0).First().First()),
                     genericOnly ? Is.EqualTo("Storm Front Jim Butcher James Marsters") : Is.EqualTo("book|Jim Butcher|Storm Front"));
             }
+        }
+
+        [Test]
+        public void should_run_title_only_book_query_alongside_author_title_query()
+        {
+            if (_kind == "MyAnonaMouse")
+            {
+                Assert.Ignore("MAM uses its native search request format rather than Newznab book-search parameters.");
+            }
+
+            var criteria = Criteria();
+            criteria.Books[0].Editions[0].Narrator = null;
+
+            var firstTier = CreateGenerator().GetSearchRequests(criteria).GetTier(0);
+
+            Assert.That(firstTier.SelectMany(page => page).Select(SearchText), Is.EqualTo(new[]
+            {
+                "book|Jim Butcher|Storm Front",
+                "book||Storm Front"
+            }));
         }
 
         [TestCase(true)]
@@ -143,14 +163,19 @@ namespace Chaptarr.Core.Test.Indexers
 
             var releases = await probe.Fetch(Criteria());
 
+            var usesBookSearch = _kind != "MyAnonaMouse";
             Assert.That(releases, Has.Count.EqualTo(1));
-            Assert.That(probe.Queries, Has.Count.EqualTo(firstTierHasResults ? 1 : 2));
+            Assert.That(probe.Queries, Has.Count.EqualTo(firstTierHasResults ? 1 : usesBookSearch ? 3 : 2));
             Assert.That(probe.Queries[0], Is.EqualTo("Storm Front Jim Butcher James Marsters"));
             if (!firstTierHasResults)
             {
                 Assert.That(probe.Queries[1], Is.EqualTo(_kind == "MyAnonaMouse"
                     ? "Storm Front Jim Butcher"
                     : "book|Jim Butcher|Storm Front"));
+                if (usesBookSearch)
+                {
+                    Assert.That(probe.Queries[2], Is.EqualTo("book||Storm Front"));
+                }
             }
         }
 

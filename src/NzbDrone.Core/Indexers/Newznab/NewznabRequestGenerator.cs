@@ -96,13 +96,18 @@ namespace NzbDrone.Core.Indexers.Newznab
 
             if (SupportsBookSearch)
             {
-                AddBookPageableRequests(pageableRequests,
+                // Run both structured book queries in the same tier. A combined author/title
+                // query can return an unrelated book by the same author; if that alone formed
+                // a tier, HttpIndexerBase would stop before trying the exact title-only query.
+                pageableRequests.AddTier();
+                pageableRequests.Add(GetPagedRequests(MaxPages,
                     searchCategories,
-                    $"&author={NewsnabifyTitle(searchCriteria.AuthorQuery)}&title={NewsnabifyTitle(searchCriteria.BookQuery)}");
-
-                AddBookPageableRequests(pageableRequests,
+                    "book",
+                    $"&author={NewsnabifyTitle(searchCriteria.AuthorQuery)}&title={NewsnabifyTitle(searchCriteria.BookQuery)}"));
+                pageableRequests.Add(GetPagedRequests(MaxPages,
                     searchCategories,
-                    $"&title={NewsnabifyTitle(searchCriteria.BookQuery)}");
+                    "book",
+                    $"&title={NewsnabifyTitle(searchCriteria.BookQuery)}"));
             }
 
             if (supportsSearch)
@@ -128,13 +133,6 @@ namespace NzbDrone.Core.Indexers.Newznab
             }
 
             return pageableRequests;
-        }
-
-        private void AddBookPageableRequests(IndexerPageableRequestChain chain, IEnumerable<int> categories, string parameters)
-        {
-            chain.AddTier();
-
-            chain.Add(GetPagedRequests(MaxPages, categories, "book", $"{parameters}"));
         }
 
         private IEnumerable<IndexerRequest> GetPagedRequests(int maxPages, IEnumerable<int> categories, string searchType, string parameters)
